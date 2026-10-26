@@ -8,7 +8,7 @@ ifeq ($(OS),Windows_NT)
     RM = del /Q
     FIXPATH = $(subst /,\,$1)
 else
-    VENV_BIN = venv/bin
+    VENV_BIN = .venv/bin
     PYTHON = $(VENV_BIN)/python
     PIP = $(VENV_BIN)/pip
     RM = rm -rf

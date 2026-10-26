@@ -14,6 +14,7 @@ License: MIT
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import platform
 import sys
@@ -44,6 +45,7 @@ HAS_DEPENDENCIES = True
 BOOTSTRAP_ERROR = None
 
 try:
+    import numpy as np
     import pandas as pd
     import structlog
     from rich.console import Console
@@ -120,6 +122,13 @@ def _prepare_trade_signal(
 
     log = structlog.get_logger("main.risk")
 
+    if direction not in (-1, 1):
+        raise ValueError("Trade direction must be BUY or SELL")
+    if not all(math.isfinite(value) for value in (price, atr, confidence, risk_multiplier)):
+        raise ValueError("Trade inputs must be finite")
+    if price <= 0 or atr <= 0 or not 0 <= confidence <= 1 or not 0 <= risk_multiplier <= 1:
+        raise ValueError("Invalid price, ATR, confidence or risk multiplier")
+
     # 1. SL/TP Calculation
     stop_loss = price - (direction * 2 * atr)
     take_profit = price + (direction * 4 * atr)
@@ -156,10 +165,18 @@ def _prepare_trade_signal(
         else 0.0
     )
 
-    # 4. Apply Macro Risk Multiplier
-    if risk_multiplier < 1.0:
+    # Honor a reduced allocation as well as macro risk limits. Never round up risk.
+    allocation_scale = min(1.0, approved_risk / cfg.risk_per_trade) if approved_risk > 0 else 0.0
+    combined_scale = allocation_scale * risk_multiplier
+    if combined_scale < 1.0:
         old_lot = lot_size
-        lot_size = round(lot_size * risk_multiplier, 2)
+        from decimal import ROUND_DOWN, Decimal
+
+        lot_size = float(
+            (Decimal(str(lot_size)) * Decimal(str(combined_scale))).quantize(
+                Decimal("0.01"), rounding=ROUND_DOWN
+            )
+        )
         log.info(
             "Macro risk reduction applied",
             multiplier=risk_multiplier,
@@ -392,7 +409,7 @@ def run_live(
                 with profile("inference"):
                     seq = None
                     if torch:
-                        seq = torch.from_numpy(df_features.values[-60:]).float()
+                        seq = df_features.values[-60:].astype(np.float32)
 
                     signal_obj = model.predict(
                         obs, seq=seq, regime_info=regime_info, symbol=cfg.symbol

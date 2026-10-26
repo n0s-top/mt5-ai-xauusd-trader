@@ -102,9 +102,20 @@ class EnsembleModel(BaseModel):
         """Load PPO model from path."""
         self.ppo_agent = PPOAgent(model_path=path, device=self.device)
 
-    def load_lstm(self, path: str | Path) -> None:
-        """Load LSTM model from path."""
-        self.lstm_model = LSTMModel(model_path=path, device=self.device)
+    def load_lstm(
+        self,
+        path: str | Path,
+        input_dim: int = 140,
+    ) -> None:
+        """Load an LSTM checkpoint with the specified feature dimension."""
+        self.lstm_model = LSTMModel(
+            input_dim=input_dim,
+            model_path=path,
+            device=self.device,
+        )
+
+        if self.lstm_model.model is None:
+            raise RuntimeError(f"Failed to load LSTM checkpoint: {path}")
 
     def load_dreamer(self, path: str | Path) -> None:
         """Load Dreamer model from path."""

@@ -126,28 +126,25 @@ class PPOAgent(BaseModel):
             )
 
         try:
-            # Explicit shape validation and reshaping for production robustness
-            obs = features.astype(np.float32)
-            expected_shape = None
-            if self.model is not None and hasattr(self.model, "observation_space"):
-                expected_shape = self.model.observation_space.shape
+            # Normalize observation shape according to the trained model.
+            obs = np.asarray(features, dtype=np.float32)
 
-            if obs.ndim == 1:
-                # If only a single feature vector is provided, reshape to (1, 1, features)
-                # or (1, window_size, features) if possible.
-                if expected_shape and len(expected_shape) == 2:
-                    if obs.shape[0] == expected_shape[1]:
-                        obs = obs.reshape(1, 1, -1)
-                    else:
-                        obs = obs.reshape(1, *expected_shape)
-                else:
-                    obs = obs.reshape(1, 1, -1)
-            elif obs.ndim == 2:
-                # (window, features) -> (1, window, features)
-                obs = np.expand_dims(obs, axis=0)
-            elif obs.ndim > 3:
-                self.logger.error(f"Invalid observation shape: {obs.shape}. Expected up to 3 dims.")
-                raise ValueError(f"Invalid observation shape: {obs.shape}")
+            expected_shape = tuple(self.model.observation_space.shape)
+
+            if obs.shape == expected_shape:
+                pass  # Single observation, already valid.
+            elif obs.ndim == len(expected_shape) + 1 and obs.shape[1:] == expected_shape:
+                pass  # Valid vectorized batch.
+            elif obs.size == int(np.prod(expected_shape)) and (
+                obs.ndim <= len(expected_shape) + 1
+            ):
+                # Reshape one observation only when element counts match.
+                obs = obs.reshape(expected_shape)
+            else:
+                raise ValueError(
+                    f"Invalid observation shape {obs.shape}; "
+                    f"expected {expected_shape} or (n_env, *{expected_shape})"
+                )
 
             # SB3 predict returns (action, states)
             # deterministic=True is used for production/inference consistency
