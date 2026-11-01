@@ -295,6 +295,23 @@ def test_safety_rejection_does_not_generate_reference_scenarios(live_snapshot):
     assert "reference_scenarios" not in plan
 
 
+@pytest.mark.parametrize("momentum", [2001., 2000.])
+def test_confirmed_wait_has_reference_prices_without_lots(monkeypatch, live_snapshot, momentum):
+    monkeypatch.setattr(assistant.XAUUSDM1Scalper, "indicators",
+                        staticmethod(lambda frame: frame.assign(atr=2., ema200=2000., ema9=momentum,
+                                                    ema21=2000., adx=30., rsi=55.)))
+    plan = assistant.snapshot("XAUUSDc", .5, assistant.ConfirmedM1M5())
+    assert plan["status"] == "WAIT"
+    scenarios = plan["reference_scenarios"]
+    assert [s["side"] for s in scenarios] == (["BUY"] if momentum > 2000 else ["BUY", "SELL"])
+    for scenario in scenarios:
+        assert scenario["status"] == "REFERENCE_ONLY"
+        assert scenario["volume"] is None
+        assert scenario["entry"] > 0 and scenario["stop_loss"] > 0 and scenario["take_profit"] > 0
+    if momentum == 2000:
+        assert "preferred_side" not in plan
+
+
 @pytest.mark.parametrize("reason", ["Spread exceeds ATR budget", "Abnormal candle range"])
 def test_market_filter_keeps_reference_prices_but_never_lots(monkeypatch, live_snapshot, reason):
     live_snapshot.predict = lambda *args, **kwargs: ScalperSignal(0, 0, None, None, reason)

@@ -151,5 +151,19 @@ def future_entry(signal, quote, candle, equity, risk_percent, risk_reward=2.0):
         trigger_quote="ASK" if direction == 1 else "BID",
         exit_action="SELL_TO_CLOSE" if direction == 1 else "BUY_TO_CLOSE",
         scenario="Conditional price scenario; not a guaranteed forecast",
+        entry_details={
+            "trigger_price": trigger,
+            "signal_high": float(candle["high"]),
+            "signal_low": float(candle["low"]),
+            "spread_price": float(spread),
+            "tick_size": float(step),
+            "minimum_stop_distance": float(minimum_distance),
+            "risk_distance": float(abs(trigger - stop)),
+            "reward_distance": float(abs(target - trigger)),
+            "trigger_rule": "Ask vuot high nen + spread + tick; thoa khoang cach broker" if direction == 1 else "Bid xuyen low nen - tick; thoa khoang cach broker",
+            "stop_rule": "SL theo cau truc chien luoc, lam tron tick; khong doi SL xa hon sau khi vao",
+            "target_rule": f"TP theo entry va SL, RR ke hoach {risk_reward:g}R truoc phi",
+            "cancel_rule": "Chi xem xet khi setup con hop le; huy ke hoach khi het han snapshot, gia/SL/TP khong con hop le",
+        },
     )
     return plan

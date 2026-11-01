@@ -11,6 +11,7 @@ import pandas as pd
 
 from src.research.scalper_comparison import compare
 from src.research.tick_replay import TickReplay
+from src.research.qualification import assess_research
 
 
 def main():
@@ -19,7 +20,7 @@ def main():
     parser.add_argument(
         "--strategies",
         nargs="+",
-        choices=("pullback", "adaptive", "m5_m1", "m5_m1_quality", "m5_m1_regime"),
+        choices=("m1_m5_confirmed", "m1_m5_breakout", "session_engulfing", "orb5_mtf", "pullback", "adaptive", "m5_m1", "m5_m1_quality", "m5_m1_regime"),
         default=["pullback", "adaptive"],
     )
     parser.add_argument(
@@ -42,6 +43,8 @@ def main():
     )
     parser.add_argument("--slippage-ticks", type=int, default=2)
     parser.add_argument("--max-hold", type=int, default=120)
+    parser.add_argument("--min-net-rr", type=float, default=0,
+                        help="Minimum planned RR after fees/slippage; 0 preserves legacy research behavior")
     parser.add_argument("--risk-percent", type=float, default=0.5)
     parser.add_argument("--initial-equity", type=float, default=10000)
     parser.add_argument("--output", type=Path, default=Path("reports/scalper_comparison"))
@@ -173,8 +176,10 @@ def main():
         progress=lambda name, segment, i, n: print(f"{name} | {segment} | {i}/{n}", flush=True),
         tick_replay=replay,
         strategies=tuple(args.strategies),
+        min_net_reward_risk=args.min_net_rr,
     )
     trades = result.pop("trades")
+    result["assessment"] = assess_research(result)
     events = result.pop("execution_events")
     result["metadata"] = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -195,6 +200,7 @@ def main():
         "slippage_ticks": args.slippage_ticks,
         "max_hold_bars": args.max_hold,
         "risk_percent": args.risk_percent,
+        "min_net_reward_risk": args.min_net_rr,
         "initial_virtual_equity": args.initial_equity,
         "execution_proxy": "M1 OHLC, pending expires after one bar; SL first on ambiguous paths",
         "sizing_proxy": "Continuous normalized risk; no broker lot rounding/margin or Kelly",
@@ -209,9 +215,12 @@ def main():
             for name in (
                 "src/strategies/xauusd_m1_scalper.py",
                 "src/strategies/adaptive_scalper.py",
+                "src/strategies/orb_mtf.py",
+                "src/strategies/session_engulfing.py",
                 "src/strategies/m5_m1_pullback.py",
                 "src/strategies/entry_support.py",
                 "src/research/scalper_comparison.py",
+                "src/research/qualification.py",
             )
         },
     }
@@ -259,12 +268,15 @@ def main():
         "# So sánh chiến lược: " + ", ".join(args.strategies),
         "",
         "**Nghiên cứu mô phỏng, chưa chứng minh chiến lược nào tốt hơn.**",
+        "Đánh giá: " + "; ".join(f"{name}: {item['status']}" for name, item in result["assessment"].items()),
+        "Nếu INCOMPLETE_DATA: lợi nhuận chỉ gồm lệnh đã xác định; chưa biết equity cuối thực tế.",
+        f"Bộ lọc R:R kế hoạch sau phí/trượt giá: {args.min_net_rr:g} (0 = tắt). Ngưỡng 30 lệnh chỉ để sàng lọc, không chứng minh ý nghĩa thống kê.",
         "",
         f"Dữ liệu: {len(bars)} nến M1, từ {bars.index[0]} đến {bars.index[-1]}.",
         f"Mốc holdout: {result['split_time_utc']}. Hai phần đều dùng dữ liệu trước đó để làm ấm chỉ báo.",
         "",
-        "| Chiến lược | Phần | Tín hiệu | Lệnh | Win rate | Kỳ vọng R/lệnh | Tổng R | Drawdown đóng lệnh |",
-        "|---|---|---:|---:|---:|---:|---:|---:|",
+        "| Chiến lược | Phần | Tín hiệu | Loại vì chi phí | Lệnh | Win rate | Kỳ vọng R/lệnh | Tổng R | Drawdown đóng lệnh |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for name, segments in result["results"].items():
         for segment, stats in segments.items():
@@ -273,7 +285,7 @@ def main():
                 f"{stats['expectancy_r']:.3f}" if stats["expectancy_r"] is not None else "N/A"
             )
             lines.append(
-                f"| {name} | {segment} | {stats['signals']} | {stats['trades']} | {win} | "
+                f"| {name} | {segment} | {stats['signals']} | {stats['cost_rejected_signals']} | {stats['trades']} | {win} | "
                 f"{expectation} | {stats['total_r']:.2f} | {stats['max_closed_trade_drawdown_percent']:.2f}% |"
             )
     lines += [

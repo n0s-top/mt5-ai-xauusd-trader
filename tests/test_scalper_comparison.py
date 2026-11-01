@@ -75,6 +75,27 @@ def test_empty_summary_does_not_invent_a_win_rate():
     assert report["ending_equity"] == 10000
 
 
+def test_cost_gate_rejects_before_execution(monkeypatch):
+    import src.research.scalper_comparison as engine
+    from src.strategies.xauusd_m1_scalper import ScalperSignal
+
+    class SignalStrategy:
+        risk_reward = 2
+        indicators = staticmethod(lambda frame: frame)
+
+        def predict(self, *args, **kwargs):
+            return ScalperSignal(1, .6, 99., 102., "fixture")
+
+    monkeypatch.setattr(engine, "XAUUSDM1Scalper", SignalStrategy)
+    bars = candles([[100, 100.2, 99.8, 100]] * 3501)
+    bars["tick_volume"] = 100
+    report = engine.compare(bars, pd.Series(.1, index=bars.index), strategies=("pullback",),
+                            fee_price=1., min_net_reward_risk=1.5)
+    assert not report["trades"]
+    for stats in report["results"]["pullback"].values():
+        assert stats["cost_rejected_signals"] == stats["signals"] > 0
+
+
 def test_equity_and_drawdown_use_net_r():
     report = summarize(
         [

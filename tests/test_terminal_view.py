@@ -41,6 +41,18 @@ def test_plain_view_explains_wait_lot_and_local_expiry():
     assert "\x1b[" not in text
 
 
+def test_forecast_is_labeled_as_direction_not_trade_win_rate():
+    output = StringIO()
+    plan = sample()
+    plan["forecast"] = {"probabilities": {"UP": .4, "FLAT": .35, "DOWN": .25},
+                        "movement_threshold_price": .344, "validation_status": "RESEARCH_ONLY"}
+    render_plan(plan, Console(file=output, width=120, no_color=True))
+    text = output.getvalue()
+    assert "5 phut" in text
+    assert "UP: 40.0%" in text
+    assert "KHONG phai xac suat thang lenh" in text
+
+
 def test_color_view_emits_ansi_and_keeps_external_text_literal():
     output = StringIO()
     plan = sample()

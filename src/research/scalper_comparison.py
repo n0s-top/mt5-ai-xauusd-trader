@@ -9,6 +9,8 @@ from src.strategies.adaptive_scalper import AdaptiveScalper
 from src.strategies.entry_support import future_entry
 from src.strategies.m5_m1_pullback import M5M1Pullback, M5M1QualityPullback, M5M1RegimePullback
 from src.strategies.scalping_data import prepare_scalping_data
+from src.strategies.orb_mtf import ORB5MTF, RollingM1M5, ConfirmedM1M5
+from src.strategies.session_engulfing import SessionEngulfing
 from src.strategies.xauusd_m1_scalper import XAUUSDM1Scalper
 
 
@@ -134,6 +136,7 @@ def compare(
     tick_replay=None,
     strategies=("pullback", "adaptive"),
     use_prefilter=True,
+    min_net_reward_risk=0.0,
 ):
     if not bars.index.is_monotonic_increasing or bars.index.has_duplicates:
         raise ValueError("History must be chronological and unique")
@@ -147,7 +150,7 @@ def compare(
     if not all(math.isfinite(v) and v > 0 for v in settings) or not 0 < risk_percent <= 5:
         raise ValueError("Invalid tick size, risk or initial equity")
     if (
-        not all(math.isfinite(v) and v >= 0 for v in (stop_distance, slippage_ticks, fee_price))
+        not all(math.isfinite(v) and v >= 0 for v in (stop_distance, slippage_ticks, fee_price, min_net_reward_risk))
         or max_hold < 1
     ):
         raise ValueError("Invalid cost or holding settings")
@@ -166,6 +169,10 @@ def compare(
     split = warmup + int((len(bars) - warmup) * 0.7)
     all_trades, reports, events = [], {}, []
     factories = {
+        "m1_m5_confirmed": ConfirmedM1M5,
+        "m1_m5_breakout": RollingM1M5,
+        "session_engulfing": SessionEngulfing,
+        "orb5_mtf": ORB5MTF,
         "pullback": XAUUSDM1Scalper,
         "adaptive": AdaptiveScalper,
         "m5_m1": M5M1Pullback,
@@ -183,6 +190,23 @@ def compare(
         strategy.indicators = lambda frame: frame
         candidates = None
         a = enriched["M1"]
+        if use_prefilter and name == "session_engulfing":
+            previous_close, previous_open = a.close.shift(), a.open.shift()
+            buy = ((previous_close < previous_open) & (a.close > a.open)
+                   & (a.open <= previous_close) & (a.close >= previous_open))
+            sell = ((previous_close > previous_open) & (a.close < a.open)
+                    & (a.open >= previous_close) & (a.close <= previous_open))
+            decision = a.index + pd.Timedelta(minutes=1)
+            london = decision.tz_convert("Europe/London")
+            new_york = decision.tz_convert("America/New_York")
+            session = ((decision.weekday < 5)
+                       & (((london.hour >= 8) & (london.hour < 12))
+                          | ((new_york.hour >= 8) & (new_york.hour < 12))))
+            candidates = np.flatnonzero(((buy | sell) & session).to_numpy()) + 1
+        if use_prefilter and name in ("orb5_mtf", "m1_m5_breakout", "m1_m5_confirmed"):
+            high = a.high.shift().rolling(5, min_periods=5).max()
+            low = a.low.shift().rolling(5, min_periods=5).min()
+            candidates = np.flatnonzero(((a.close > high) | (a.close < low)).to_numpy()) + 1
         if (
             use_prefilter
             and tick_replay is None
@@ -212,6 +236,7 @@ def compare(
         for segment, begin, end in (("development", warmup, split), ("holdout", split, len(bars))):
             trades = []
             signals = 0
+            cost_rejected_signals = 0
             missing_quotes = unknown_windows = unresolved_positions = 0
             i = begin
             last_progress = -1
@@ -229,7 +254,7 @@ def compare(
                     continue
                 decision = bars.index[i]
                 frames = [
-                    enriched[key].iloc[max(0, positions[key][i] - 240) : positions[key][i]]
+                    enriched[key].iloc[max(0, positions[key][i] - getattr(strategy, "history_bars", 240)) : positions[key][i]]
                     for key in ("M1", "M5", "M15")
                 ]
                 observed_quote = tick_replay.quote_at(decision) if tick_replay is not None else None
@@ -257,6 +282,14 @@ def compare(
                 if observed_quote is not None:
                     quote.update(bid=observed_quote["bid"], ask=observed_quote["ask"])
                 plan = future_entry(signal, quote, candle, 0, risk_percent, strategy.risk_reward)
+                direction = signal.direction
+                total_cost = 2 * slippage_ticks * tick_size + fee_price
+                net_risk = direction * (plan["entry"] - plan["stop_loss"]) + total_cost
+                net_reward = direction * (plan["take_profit"] - plan["entry"]) - total_cost
+                if min_net_reward_risk and (net_risk <= 0 or net_reward / net_risk < min_net_reward_risk):
+                    cost_rejected_signals += 1
+                    i += 1
+                    continue
                 if tick_replay is not None:
                     trade = tick_replay.simulate(
                         bars,
@@ -332,6 +365,7 @@ def compare(
             reports[name][segment] = dict(
                 summarize(trades, initial_equity, risk_percent),
                 signals=signals,
+                cost_rejected_signals=cost_rejected_signals,
                 missing_decision_quotes=missing_quotes,
                 unknown_tick_windows=unknown_windows,
                 unresolved_positions=unresolved_positions,

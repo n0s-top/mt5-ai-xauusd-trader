@@ -20,6 +20,8 @@ from src.strategies.entry_support import future_entry
 from src.strategies.higher_timeframes import analyze_context
 from src.strategies.kelly_sizing import STRATEGY_ID, estimate_kelly, load_results, size_with_broker
 from src.strategies.m5_m1_pullback import M5M1Pullback, M5M1QualityPullback, M5M1RegimePullback
+from src.strategies.orb_mtf import ORB5MTF, RollingM1M5, ConfirmedM1M5
+from src.research.m1_forecast import forecast_snapshot
 from src.strategies.scalping_data import prepare_scalping_data
 from src.strategies.setup_checklist import setup_checklist
 from src.strategies.terminal_view import render_plan
@@ -233,6 +235,7 @@ def snapshot(
     max_total_risk=2.0,
     include_higher_timeframes=False,
     position_ticket=None,
+    forecast_model=None,
 ):
     if isinstance(strategy, Donchian5520):
         plan = snapshot_donchian(
@@ -312,6 +315,15 @@ def snapshot(
         getattr(strategy, "risk_reward", 2.0),
     )
     plan.update(bid=tick.bid, ask=tick.ask)
+    levels = getattr(strategy, "last_levels", {})
+    if levels and "entry_details" in plan:
+        plan["entry_details"].update(levels)
+        buy = signal.direction == 1
+        anchor = levels["range_low" if buy else "range_high"]
+        plan["entry_details"]["stop_rule"] = (
+            f"SL: {'day' if buy else 'dinh'} 5 nen truoc {anchor:.3f} "
+            f"{'-' if buy else '+'} 0.1 ATR ({levels['stop_buffer']:.3f}), lam tron tick"
+        )
     apply_sizing(
         plan,
         symbol,
@@ -328,21 +340,27 @@ def snapshot(
         strategy_id=getattr(strategy, "strategy_id", STRATEGY_ID),
     )
     reference_reasons = {"No valid setup", "Spread exceeds ATR budget", "Abnormal candle range"}
-    if signal.direction == 0 and signal.reason in reference_reasons:
+    always_reference = getattr(strategy, "always_reference", False)
+    if signal.direction == 0 and (signal.reason in reference_reasons or (
+        always_reference and getattr(strategy, "last_reference_safe", False)
+    )):
         # Unsatisfied entry conditions do not turn into new trade recommendations.
         try:
             requires_m15 = getattr(strategy, "requires_m15", True)
             preferred = preferred_direction(frames, require_m15=requires_m15)
-            if preferred == 0:
+            if preferred == 0 and not always_reference:
                 raise ValueError(
                     "M15 trend and M5 momentum do not agree; wait for a clear direction"
                 )
-            plan["preferred_side"] = "BUY" if preferred == 1 else "SELL"
+            if preferred:
+                plan["preferred_side"] = "BUY" if preferred == 1 else "SELL"
             plan["direction_reason"] = (
                 "M15 EMA200 trend agrees with M5 EMA9/EMA21 momentum"
                 if requires_m15
                 else "M5 EMA9/EMA21 selects direction; M15 is warning only"
             )
+            if preferred == 0:
+                plan["direction_reason"] = "No agreed direction; two independent reference scenarios, not simultaneous orders"
             annotated = XAUUSDM1Scalper.indicators(frames["M1"])
             atr = float(annotated["atr"].iloc[-1])
             if not math.isfinite(atr) or atr <= 0:
@@ -359,8 +377,11 @@ def snapshot(
                     close + distance, float(frames["M1"]["high"].iloc[-lookback:].max()) + 0.1 * atr
                 ),
             }
+            if isinstance(strategy, ORB5MTF):
+                stops = {1: float(frames["M1"].low.iloc[-6:-1].min()) - .1 * atr,
+                         -1: float(frames["M1"].high.iloc[-6:-1].max()) + .1 * atr}
             plan["reference_scenarios"] = []
-            for direction in (preferred,):
+            for direction in ((preferred,) if preferred else (1, -1)):
                 reference = future_entry(
                     ScalperSignal(
                         direction, 0, stops[direction], None, "Unconfirmed reference scenario"
@@ -386,7 +407,7 @@ def snapshot(
                     slippage_ticks=slippage_ticks,
                     exposure=exposure,
                 )
-                if signal.reason != "No valid setup":
+                if always_reference or signal.reason != "No valid setup":
                     reference.update(
                         volume=None,
                         estimated_risk=None,
@@ -435,6 +456,11 @@ def snapshot(
         ).isoformat(),
     )
     direction = signal.direction or {"BUY": 1, "SELL": -1}.get(plan.get("preferred_side"), 0)
+    if forecast_model is not None:
+        try:
+            plan["forecast"] = forecast_snapshot(forecast_model, frames["M1"], symbol)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            plan["forecast"] = {"validation_status": "UNAVAILABLE", "reason": str(exc)}
     if not getattr(strategy, "requires_m15", True) and direction:
         plan["direction_reason"] = "M5 EMA9/EMA21 selects direction; M15 is warning only"
         m15_state = next(
@@ -461,7 +487,9 @@ def snapshot(
         "value": None,
         "reason": "No out-of-sample calibrated model for this entry/exit setup",
     }
-    if direction:
+    if direction and isinstance(strategy, ORB5MTF):
+        plan["setup_checks"] = strategy.last_checks
+    elif direction:
         side = "BUY" if direction == 1 else "SELL"
         conflicts = [
             label
@@ -518,9 +546,17 @@ def display(plan, console=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbol", default="XAUUSDc")
-    parser.add_argument(
+    parser.add_argument("--forecast-model", type=Path,
+                        help="Optional JSON five-minute direction forecast; research display only")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--profile", choices=("scalping", "trend"),
+                           help="scalping: experimental confirmed M1/M5 breakout; trend: Donchian D1 demo")
+    selection.add_argument(
         "--strategy",
         choices=(
+            "m1_m5_confirmed",
+            "m1_m5_breakout",
+            "orb5_mtf",
             "adaptive",
             "pullback",
             "m5_m1",
@@ -528,8 +564,8 @@ def main():
             "m5_m1_regime",
             "donchian_55_20",
         ),
-        default="donchian_55_20",
-        help="Entry strategy (default: donchian_55_20 D1, manual DEMO only)",
+        default=None,
+        help="Entry strategy (default: experimental m1_m5_confirmed, no session filter)",
     )
     parser.add_argument(
         "--higher-timeframes",
@@ -575,6 +611,11 @@ def main():
         help="Summarize log and exit without connecting to MT5",
     )
     args = parser.parse_args()
+    args.strategy = args.strategy or {
+        "scalping": "m1_m5_confirmed", "trend": "donchian_55_20"
+    }.get(args.profile, "m1_m5_confirmed")
+    if args.forecast_model and args.strategy == "donchian_55_20":
+        parser.error("--forecast-model is for M1 analysis; select a scalping strategy")
     args.sizing = args.sizing or ("fixed" if args.strategy == "donchian_55_20" else "kelly")
     if args.position_ticket is not None and (
         args.position_ticket <= 0 or args.strategy != "donchian_55_20"
@@ -591,6 +632,9 @@ def main():
     if not math.isfinite(args.cost_per_lot) or args.cost_per_lot < 0 or args.slippage_ticks < 0:
         parser.error("Costs and slippage must be finite and nonnegative")
     strategy = {
+        "m1_m5_confirmed": ConfirmedM1M5,
+        "m1_m5_breakout": RollingM1M5,
+        "orb5_mtf": ORB5MTF,
         "adaptive": AdaptiveScalper,
         "pullback": XAUUSDM1Scalper,
         "m5_m1": M5M1Pullback,
@@ -612,6 +656,8 @@ def main():
     frames_label = (
         "D1 Donchian 55/20 | DEMO" if args.strategy == "donchian_55_20" else "M1 / M5 / M15"
     )
+    if not getattr(strategy, "requires_m15", True):
+        frames_label = "M1 / M5 | M15 context only"
     console.print(Text(f"Bot ho tro {args.symbol} | {frames_label}", style="bold cyan"))
     console.print(
         Text(
@@ -666,6 +712,7 @@ def main():
                     max_total_risk=args.max_total_risk,
                     include_higher_timeframes=args.higher_timeframes,
                     position_ticket=args.position_ticket,
+                    forecast_model=args.forecast_model,
                 )
             except Exception as exc:
                 error_type = type(exc).__name__

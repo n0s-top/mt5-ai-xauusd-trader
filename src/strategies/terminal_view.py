@@ -65,6 +65,17 @@ def render_plan(plan, console=None):
                 style="dim",
             )
         )
+    if plan.get("forecast"):
+        forecast = plan["forecast"]
+        if forecast.get("probabilities"):
+            probabilities = forecast["probabilities"]
+            description = " | ".join(f"{key}: {probabilities[key]:.1%}" for key in ("UP", "FLAT", "DOWN"))
+            description += f"\nNguong bien dong: {forecast['movement_threshold_price']:.3f} don vi gia"
+            description += "\n" + forecast["validation_status"]
+            description += "\nXac suat huong gia, KHONG phai xac suat thang lenh. Chi de nghien cuu."
+        else:
+            description = "UNAVAILABLE: " + forecast.get("reason", "Missing forecast")
+        console.print(Panel(Text(description), title="Du bao huong gia 5 phut", border_style="cyan"))
     side = plan.get("preferred_side") or plan.get("side")
     if side in ("BUY", "SELL"):
         console.print(Text(f"HUONG UU TIEN: {side}", style=COLORS[side]))
@@ -78,7 +89,7 @@ def render_plan(plan, console=None):
         )
 
     candidates = [plan] if status == "REVIEW" else plan.get("reference_scenarios", [])
-    for candidate in candidates[:1]:
+    for candidate in candidates[:2]:
         side = candidate.get("side", "WAIT")
         reference = candidate.get("status") == "REFERENCE_ONLY"
         table = Table(
@@ -140,6 +151,13 @@ def render_plan(plan, console=None):
             )
         )
 
+    details = plan.get("entry_details")
+    if details and plan.get("status") == "REVIEW":
+        explanation = [details["trigger_rule"],
+                       f"High/Low nen: {details['signal_high']:.3f} / {details['signal_low']:.3f}",
+                       f"Khoang Entry-SL: {details['risk_distance']:.3f} | Entry-TP: {details['reward_distance']:.3f}",
+                       details["stop_rule"], details["target_rule"], details["cancel_rule"]]
+        console.print(Panel(Text("\n".join(explanation)), title="Chi tiet Entry / SL / TP", border_style="cyan"))
     checks = plan.get("setup_checks", [])
     if plan.get("strategy_checks"):
         strategy_checks = Table(title="Bo loc chien luoc", expand=True)

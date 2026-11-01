@@ -1,10 +1,63 @@
 # Hướng dẫn sử dụng bot hỗ trợ vào lệnh
 
-Bot mặc định dùng Donchian 55/20 trên D1 để lập kế hoạch XAUUSD trên tài khoản demo. Hiển thị mức phá kênh, SL ban đầu 2 ATR20, kênh thoát 20 phiên và lot tham khảo; không có TP cố định. Bạn đặt lệnh thủ công trong MT5. Bot không tự gửi lệnh và không chạy phân tích nền.
+Mặc định luôn hiện entry/SL/TP **tham khảo** khi WAIT và dữ liệu còn hợp lệ. Có hướng M5 thì hiện một kịch bản theo hướng đó; chưa có hướng rõ thì hiện hai kịch bản BUY/SELL độc lập, không phải đặt đồng thời. Các kịch bản WAIT giữ nhãn `REFERENCE_ONLY`, không đề xuất lot và không biến thành tín hiệu vào lệnh. Dữ liệu lỗi, thiếu lịch sử/ATR hoặc snapshot hết hạn thì không dựng giá tham khảo.
+
+Profile `scalping` đã nâng lên **M1/M5 có xác nhận** (`m1_m5_confirmed`), kèm giải thích cụ thể entry, SL, TP. Xem [quy tắc, ví dụ giá và kết quả so sánh](CONFIRMED_M1_M5.md). Win rate holdout MT5 tăng từ 32,60% lên 36,25%, nhưng return sau phí vẫn −0,10%; chưa chứng minh lợi nhuận ổn định.
+
+## Dự báo 5 phút với điểm vào M1
+
+Đã có [mô hình dự báo UP/FLAT/DOWN trong 5 phút](M1_FORECAST.md), hiển thị bằng tùy chọn `--forecast-model`. Đây là xác suất hướng giá, không phải xác suất thắng lệnh; mức cải thiện trên dữ liệu kiểm tra còn nhỏ nên chỉ dùng nghiên cứu.
+
+```powershell
+.\venv\Scripts\python.exe run_mt5_assistant.py --symbol XAUUSD --profile scalping --forecast-model reports/m1_forecast/model.json --color always
+```
+
+Nếu file mô hình chưa có, chạy `.\venv\Scripts\python.exe -m scripts.train_m1_forecast` trước. Phần dự báo không tự tạo hoặc gửi lệnh.
+
+## Hai cấu hình theo lựa chọn của bạn
+
+**1. Scalping XAUUSD M1/M5** — breakout 5 nến có xác nhận ADX/độ dốc M5, thân nến và giới hạn đuổi giá M1; không lọc phiên, M15 chỉ làm bối cảnh. Kelly chưa đủ lịch sử đúng mã mới thì không đề xuất lot. Bản này vẫn thử nghiệm: holdout MT5 sau chi phí giả định có 80 lệnh, win rate 36,25%, return −0,10%; chưa chứng minh lợi nhuận.
+
+```powershell
+.\venv\Scripts\python.exe run_mt5_assistant.py --symbol XAUUSD --profile scalping --color always
+```
+
+**2. Theo xu hướng D1** — Donchian 55/20, fixed sizing, risk mặc định 0,5%, chỉ demo. Trong các ca có phí đã kiểm tra, CAGR thấp nhất khoảng 1,32%/năm và drawdown đóng ngày cao nhất 5,64%. Đây là số mô phỏng theo giả định chi phí, chưa xác nhận live.
+
+```powershell
+.\venv\Scripts\python.exe run_mt5_assistant.py --symbol XAUUSD --profile trend --color always
+```
+
+Chạy từng cấu hình khi cần; không dùng đồng thời `--profile` và `--strategy`. Hai cấu hình không cộng tín hiệu hay tự chuyển chế độ. Cả hai chỉ hỗ trợ thao tác thủ công, không gửi lệnh. Không truyền hai tùy chọn này sẽ dùng `m1_m5_confirmed`, giống profile `scalping`. Dùng tên symbol đúng tại broker.
+
+Đã [nâng cấp lựa chọn M1/M5 và bộ kiểm chứng sau chi phí](QUANT_UPGRADE.md): thêm `--strategy m1_m5_breakout`, backtest có `--min-net-rr`, trạng thái đánh giá và kiểm tra tick thiếu dữ liệu. Kết quả mới vẫn chưa chứng minh lợi thế; giữ mặc định hiện tại. Có thể xem lệnh chạy thử và giới hạn trong báo cáo nâng cấp.
+
+Bot mặc định dùng **breakout M1/M5 có xác nhận, không lọc phiên** (`m1_m5_confirmed`). M15 chỉ làm bối cảnh. Bạn đặt lệnh thủ công trong MT5; bot không tự gửi lệnh và không chạy phân tích nền. Holdout MT5 có win rate 36,25%, return −0,10% sau chi phí giả định; bản này vẫn thử nghiệm, chưa kiểm chứng BTCUSD. Các kết quả ORB v1 bên dưới không áp dụng cho mặc định mới.
+
+### Tùy chọn cũ: breakout 5 nến MTF — không lọc phiên
+
+```powershell
+.\venv\Scripts\python.exe run_mt5_assistant.py --symbol XAUUSD --strategy orb5_mtf --color always
+```
+
+- Biên: high/low của 5 nến M1 liên tục trước nến xác nhận, không gồm chính nến xác nhận.
+- Xét mọi giờ có dữ liệu hợp lệ, không chờ phiên New York, không giới hạn breakout đầu tiên mỗi ngày. Mỗi lần nhấn Enter là một ảnh chụp phân tích; lặp lại cùng nến có thể hiện cùng setup.
+- BUY: M1 đóng trên biên và trên open, M5 EMA9 > EMA21, M15 close > EMA200. SELL đối xứng. Chỉ dùng nến đã đóng.
+- SL ngoài biên đối diện thêm 0,1 ATR14 M1; TP kế hoạch theo 2R. Giá vào có điều kiện, chi phí và quy tắc broker tiếp tục được kiểm tra bởi bot.
+- Bỏ qua khi thiếu nến, lệch khung, spread quá 0,15 ATR hoặc nến vượt 3 ATR. Không hiện kịch bản pullback thay cho ORB khi đang WAIT.
+- Mã lịch sử riêng: `rolling5_mtf_m1_v2`; không dùng lịch sử Kelly của ORB v1. Mặc định dùng Kelly; chưa đủ lịch sử đúng mã thì không đề xuất lot. Có thể dùng `--sizing fixed --risk-percent 0.5` để tính lot theo mức rủi ro cố định.
+
+Đây là rolling breakout, không còn biên mở cửa phiên. [Backtest ORB v1 ngày 01/11/2026](ORB5_MTF_BACKTEST.md) là kết quả lịch sử của quy tắc cũ; xem [backtest rolling mới](QUANT_UPGRADE.md) để đánh giá bản hiện tại. Sau khi sửa mã, thoát bot bằng `q` và chạy lại để áp dụng.
+
+Đã [so sánh thêm ba bản pullback nhiều lệnh hơn](SCALPER_ALTERNATIVES_BACKTEST.md) trên cùng dữ liệu MT5 và HistData 2026, sau phí giả định và spread tăng 50%. Các bản có 108–157 lệnh holdout MT5 và 357–613 lệnh holdout HistData ở spread gốc, nhưng đều âm; chưa chọn thay ORB mặc định.
+
+Đã viết [quy tắc và backtest H1/M5/M1 engulfing theo phiên](SESSION_ENGULFING_BACKTEST.md) từ ý tưởng scalping bạn cung cấp. Holdout HistData 2026 có 26 lệnh, +0,16% sau chi phí giả định; khi spread tăng 50% chỉ còn 2 lệnh, −1,00%. Bản này chỉ để nghiên cứu, chưa có bộ lọc DXY/tin tức/VWAP hoặc chốt từng phần; chưa thêm vào bot live.
+
+Xem [đánh giá chọn chiến lược từ dữ liệu đã có](STRATEGY_SELECTION.md): nhóm scalping được so riêng theo kỳ vọng sau phí và độ bền khi tăng spread; nhóm D1 đánh giá riêng theo CAGR/drawdown. Donchian 55/20 D1 là ứng viên ưu tiên nếu chấp nhận giữ nhiều ngày và ưu tiên drawdown thấp. Đánh giá này không tự đổi chiến lược mặc định hoặc chứng minh lợi nhuận live.
 
 ## 1. Khởi động
 
-Mở MetaTrader 5 trên máy, đăng nhập tài khoản demo và kiểm tra kết nối mạng. Chiến lược mặc định chặn lập kế hoạch trên tài khoản thật.
+Mở MetaTrader 5 trên máy, đăng nhập tài khoản demo và kiểm tra kết nối mạng. Chỉ chiến lược Donchian D1 có chặn tài khoản thật riêng; ORB là hỗ trợ phân tích thủ công.
 
 Mở terminal tại thư mục dự án rồi chạy:
 
@@ -20,7 +73,7 @@ Nếu broker dùng tên vàng khác, chỉ định đúng symbol:
 .\venv\Scripts\python.exe run_mt5_assistant.py --symbol XAUUSD --color always
 ```
 
-Symbol mặc định là `XAUUSDc`. Chiến lược mặc định cần ít nhất 55 phiên D1 đã đóng; các chiến lược M1 tùy chọn cần khoảng 5.000 nến M1.
+Symbol mặc định là `XAUUSDc`. Bot lấy khoảng 5.000 nến M1 để dựng M5 và bối cảnh M15. Donchian D1 tùy chọn cần ít nhất 55 phiên D1 đã đóng.
 
 ## 2. Các phím điều khiển
 
@@ -39,9 +92,9 @@ Sau mỗi lần phân tích, bot chờ thao tác tiếp theo. Giá trên màn h�
 
 ## 3. Đọc kết quả
 
-### Mặc định: Donchian 55/20 D1, chỉ demo
+### Tùy chọn: Donchian 55/20 D1, chỉ demo
 
-Chạy không có `--strategy` sẽ dùng `donchian_55_20`, fixed sizing và risk tối đa 0,5%. Bản D1 được ưu tiên vì kết quả dài hạn trên MT5/HistData vẫn dương trong ca tăng chi phí; chưa xác nhận lợi nhuận live. Đây là chiến lược theo xu hướng ngày, không phải scalping M1. Xem [quy tắc và cách dùng](DONCHIAN_DEMO.md) và [bằng chứng backtest](PUBLISHED_STRATEGIES_CHECK.md).
+Chọn `--strategy donchian_55_20` để dùng bản D1 với fixed sizing và risk tối đa 0,5%. Bản D1 có kết quả dài hạn trên MT5/HistData vẫn dương trong ca tăng chi phí; chưa xác nhận lợi nhuận live. Đây là chiến lược theo xu hướng ngày. Xem [quy tắc và cách dùng](DONCHIAN_DEMO.md) và [bằng chứng backtest](PUBLISHED_STRATEGIES_CHECK.md).
 
 ```powershell
 .\venv\Scripts\python.exe run_mt5_assistant.py --symbol XAUUSD --strategy donchian_55_20 --color always

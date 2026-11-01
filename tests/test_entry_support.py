@@ -33,3 +33,18 @@ def test_blocks_unsafe_entries(change):
 def test_hold_needs_no_quote():
     assert build_entry_plan(ScalperSignal(0, 0, None, None, "No setup"), {},
                             equity=10000).status == "WAIT"
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+def test_future_entry_explains_actual_rounded_prices(direction):
+    from src.strategies.entry_support import future_entry
+    from src.strategies.xauusd_m1_scalper import ScalperSignal
+
+    plan = future_entry(ScalperSignal(direction, .6, 1998 if direction == 1 else 2002, None, "test"),
+                        {"bid": 2000., "ask": 2000.24, "tick_size": .001},
+                        {"high": 2001., "low": 1999.}, 0, .5)
+    detail = plan["entry_details"]
+    assert detail["trigger_price"] == plan["entry"]
+    assert detail["risk_distance"] == pytest.approx(abs(plan["entry"] - plan["stop_loss"]))
+    assert detail["reward_distance"] == pytest.approx(abs(plan["take_profit"] - plan["entry"]))
+    assert plan["trigger_quote"] == ("ASK" if direction == 1 else "BID")
