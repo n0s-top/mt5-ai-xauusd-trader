@@ -1,74 +1,52 @@
 # Institutional Decision Support System (DSS)
 
 ## Overview
-The Institutional Decision Support System (DSS) in the MT5 AI/ML Trading Bot is designed to increase operator confidence and oversight by providing a structured, multi-dimensional view of every trading decision before execution.
-
-Unlike simple monitoring, the DSS aggregates intelligence from across the system to provide a unified "Go/No-Go" packet that is both machine-readable for automated filters and human-readable for active review.
+The Decision Support System (DSS) is a core component of the XAUUSD trading platform designed to provide operators with a structured, auditable, and high-confidence "decision packet" before any trade execution. It augments the raw signal generation with market regime awareness, macro-economic safety checks, and historical performance context.
 
 ## Key Components
 
-### 1. Decision Packet
-The `DecisionPacket` is a structured Pydantic model that serves as the single source of truth for a trade decision. It includes:
-- **Symbol & Direction:** The target asset and the intended trade direction (BUY/SELL/HOLD).
-- **Consensus Level:** A qualitative measure of agreement among the ensemble models (Unanimous, Strong Majority, Mixed, etc.).
-- **Decision Status:** Augmented status level (`EXECUTE`, `CAUTION`, `BLOCKED`) derived from overall decision quality.
-- **Decision Score:** A composite score (0-100) aggregating multiple intelligence dimensions. The score is strictly clamped between 0 and 100 for numerical stability.
-- **Sizing Multiplier:** A recommended scaling factor (0.0-1.0) for position sizing based on risk and confidence.
-- **Execution Status:** A final "Go/No-Go" flag determined by the combined state of all filters.
-- **Requires Review:** A flag indicating if the trade setup carries enough uncertainty or risk to mandate manual operator approval.
-- **Blocking Reasons:** A clear list of reasons if a trade is prevented from executing.
-- **Executive Summary:** A high-level natural language rationale explaining the "Why" behind the decision in institutional terms.
+### DecisionPacket
+A typed, immutable Pydantic model that aggregates:
+- **Signal Direction:** Buy, Sell, or Hold.
+- **Consensus Score (0-40):** Weighted agreement among the ensemble models.
+- **Regime Score (0-30):** Alignment with the current market state and volatility.
+- **Risk Score (0-30):** Evaluation of Risk/Reward quality and macro-economic safety.
+- **Decision Score (0-100):** Composite score determining the execution status.
+- **Status Level:** EXECUTE, REVIEW, CAUTION, or BLOCKED.
+- **Executive Summary:** Natural language rationale for the decision.
 
-### 2. Multi-Dimensional Summary
-The DSS summarizes the following dimensions:
-- **Signal Attribution:** Detailed breakdown of which models drove the signal and which features contributed most (provided by `SignalExplainer`).
-- **Market Regime:** Contextual awareness of the current market state (Trending, Volatile, Ranging) and its favorability.
-- **Macro Risk:** Real-time awareness of macroeconomic events (CPI, FOMC, NFP) and their impact on execution safety.
-- **Performance Context:** Recent strategy performance metrics (Sharpe Ratio, Win Rate, Profit Factor, Recovery Factor, Calmar Ratio, Expectancy, and Win/Loss Ratio) to provide historical perspective.
+### DecisionSupportSystem
+The orchestrator responsible for assembling packets and applying the decision augmentation logic:
+- **EXECUTE (Score >= 80):** High-confidence signal passing all institutional guardrails.
+- **REVIEW (60 <= Score < 80):** Valid signal requiring manual oversight.
+- **CAUTION (Score < 60):** Elevated operational risk; manual review and reduced sizing recommended.
+- **BLOCKED:** Signal rejected by risk management or macro intelligence.
 
-### 3. Decision Dashboard
-For human operators, the DSS generates a high-fidelity terminal dashboard using the `rich` library. This dashboard provides:
-- Semantic icons and emojis (📈/📉, ✅/⚠️/🛑, 💎/💪, 🌊) for rapid scannability and accessibility.
-- Color-coded status and direction.
-- **Institutional Metric Highlighting:** Sharpe Ratio, Profit Factor, Recovery Factor, Calmar Ratio, Win Rate, and Win/Loss Ratio are color-coded (Green/Yellow/Red) based on institutional health targets (e.g., Green for Win Rate >= 55%, Calmar >= 3.0).
-- **Regime Alignment Score:** Visual display of how well the current regime aligns with the strategy setup (Green >= 70%).
-- Structured panels with descriptive icons for market and performance overviews.
-- **High Conviction Badge:** A `[HIGH CONVICTION] 💎` visual indicator for signals with a decision score of 90 or higher.
-- **Conviction Meter:** A visual progress bar showing the decision score conviction at a glance.
-- **Execution Blocked Panel:** A dedicated, high-visibility warning panel for blocked trades to ensure critical rejection reasons are not missed.
-- Detailed macro intelligence including active events and impact scores.
-- Full signal attribution details with model votes and feature impacts.
+## Operator Interface
+The DSS provides a high-fidelity terminal dashboard using the `rich` library. This dashboard includes:
+- **Consensus Indicators:** Visual representation of model agreement.
+- **Conviction Meters:** Color-coded progress bars for decision scores.
+- **Strategic Insights:** Analysis of regime alignment and performance context (Sharpe Ratio, Win Rate).
+- **Macro Alerts:** Real-time macroeconomic event tracking.
 
-## Augmented Decision Logic
+## Usage
+```python
+from src.core.decision_support import DecisionSupportSystem
 
-### Decision Score (0-100)
-The DSS calculates a weighted composite score to quantify the quality of a trade setup:
-- **Ensemble Consensus (40%):** Strength of agreement among models.
-- **Regime Confidence (30%):** Reliability of the detected market regime.
-- **Risk & Safety (30%):** Decomposed into Risk:Reward quality (20%, normalized against a 3.0 target) and Macro Safety (10%).
+dss = DecisionSupportSystem()
+packet = dss.assemble_packet(
+    symbol="XAUUSD",
+    explanation=signal_explanation,
+    regime_info=market_regime,
+    macro_risk=risk_status,
+    performance_metrics=account_metrics
+)
 
-### Sizing Recommendation
-The `sizing_multiplier` provides dynamic position sizing advice:
-- **EXECUTE Status:** Sizing is scaled non-linearly based on the decision score ($score^{1.5}$).
-- **CAUTION Status:** A 50% penalty is applied to the base multiplier to reduce exposure in marginal setups.
-- **BLOCKED Status:** Multiplier is forced to 0.0.
-- **Macro Risk:** Final sizing is always adjusted by the `macro_risk.risk_multiplier`.
+# Display to operator
+dss.format_for_operator(packet)
+```
 
-### Consensus Logic
-The system calculates model consensus based on the weighted alignment of votes within the ensemble:
-- **Unanimous:** 100% of weighted models agree on the direction.
-- **Strong Majority:** At least 66% of weighted votes agree.
-- **Mixed Confluence:** At least 50% of weighted votes agree.
-- **Divided/Weak:** Less than 50% weighted agreement (high risk of noise).
-
-## Technical Implementation
-The system is implemented in `src/core/decision_support.py` and integrates with:
-- `src/core/explainability.py` for signal details.
-- `src/models/regime_detector.py` for market context.
-- `src/data/event_intelligence.py` for macro risk awareness.
-- `src/core/trade_logger.py` for performance history.
-
-## Usage in Loop
-When running in "Active Review" mode, the system will pause and display the Decision Dashboard for each signal, requiring operator confirmation before sending the order to MetaTrader 5.
-
-This system ensures that every trade is backed by verifiable intelligence across multiple analytical domains.
+## Safety and Validation
+- **Immutability:** All packets are frozen to ensure an unalterable audit trail.
+- **Range Constraints:** Strict Pydantic validation on all scores and multipliers.
+- **Clamping:** Automatic clamping of sub-scores to prevent validation failures during extreme market conditions.
