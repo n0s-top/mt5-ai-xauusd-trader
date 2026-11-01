@@ -31,6 +31,24 @@ void OnDeinit(const int reason)
 
 void OnTimer()
 {
+   MqlTick tick;
+   if(SymbolInfoTick(InpSymbol, tick))
+   {
+      int quote = FileOpen("MT5_" + InpSymbol + "_quote.csv",
+                           FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+      if(quote != INVALID_HANDLE)
+      {
+         FileWrite(quote, "symbol", "time", "bid", "ask", "tick_size", "tick_value",
+                   "volume_min", "volume_max", "volume_step");
+         FileWrite(quote, InpSymbol, (long)tick.time, tick.bid, tick.ask,
+                   SymbolInfoDouble(InpSymbol, SYMBOL_TRADE_TICK_SIZE),
+                   SymbolInfoDouble(InpSymbol, SYMBOL_TRADE_TICK_VALUE_LOSS),
+                   SymbolInfoDouble(InpSymbol, SYMBOL_VOLUME_MIN),
+                   SymbolInfoDouble(InpSymbol, SYMBOL_VOLUME_MAX),
+                   SymbolInfoDouble(InpSymbol, SYMBOL_VOLUME_STEP));
+         FileClose(quote);
+      }
+   }
    MqlRates rates[];
 
    // Start at shift 1: exclude the currently forming M1 candle.

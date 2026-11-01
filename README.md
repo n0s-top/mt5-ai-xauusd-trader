@@ -7,6 +7,8 @@
 
 **Institutional-Grade Algorithmic Trading System for MetaTrader 5**
 
+**Bot hỗ trợ vào lệnh trong terminal:** [Hướng dẫn sử dụng tiếng Việt](docs/HUONG_DAN_SU_DUNG.md).
+
 ---
 
 ## 🏛️ Executive Summary

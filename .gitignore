@@ -53,6 +53,7 @@ data/raw/
 data/processed/
 data/cache/
 *.csv
+!docs/examples/kelly_history_template.csv
 *.parquet
 *.h5
 *.hdf5

@@ -20,6 +20,8 @@ class ScalperSignal:
 
 
 class XAUUSDM1Scalper:
+    requires_m15 = True
+
     def __init__(
         self,
         atr_sl_multiplier: float = 1.5,
@@ -72,11 +74,12 @@ class XAUUSDM1Scalper:
 
         hold = ScalperSignal(0, 0.0, None, None, "No valid setup")
 
-        if min(len(m1), len(m5), len(m15)) < 220:
+        checked_frames = ((m1, 1), (m5, 5)) + (((m15, 15),) if self.requires_m15 else ())
+        if min(len(frame) for frame, _ in checked_frames) < 220:
             return ScalperSignal(0, 0.0, None, None, "Insufficient history")
 
         # Fail closed on malformed data, gaps around the setup, or stale context.
-        for frame, minutes in ((m1, 1), (m5, 5), (m15, 15)):
+        for frame, minutes in checked_frames:
             required_columns = {"open", "high", "low", "close"}
             if not required_columns.issubset(frame.columns):
                 return ScalperSignal(0, 0.0, None, None, "Missing OHLC data")
@@ -99,21 +102,21 @@ class XAUUSDM1Scalper:
                 ).all():
                     return ScalperSignal(0, 0.0, None, None, "Recent candle gap")
 
-        if all(isinstance(frame.index, pd.DatetimeIndex) for frame in (m1, m5, m15)):
+        if all(isinstance(frame.index, pd.DatetimeIndex) for frame, _ in checked_frames):
             decision_time = m1.index[-1] + pd.Timedelta(minutes=1)
-            for frame, minutes in ((m5, 5), (m15, 15)):
+            for frame, minutes in checked_frames[1:]:
                 age = decision_time - (frame.index[-1] + pd.Timedelta(minutes=minutes))
                 if age < pd.Timedelta(0) or age >= pd.Timedelta(minutes=minutes):
                     return ScalperSignal(0, 0.0, None, None, "Unsynchronized timeframes")
 
         a = self.indicators(m1)
         b = self.indicators(m5)
-        c = self.indicators(m15)
+        c = self.indicators(m15) if self.requires_m15 else None
 
         # Input must contain only fully closed candles.
         last = a.iloc[-1]
         prev = a.iloc[-2]
-        trend = c.iloc[-1]
+        trend = c.iloc[-1] if c is not None else None
         momentum = b.iloc[-1]
 
         required = [
@@ -122,13 +125,13 @@ class XAUUSDM1Scalper:
             last["rsi"],
             last["adx"],
             last["atr"],
-            trend["ema200"],
             momentum["ema9"],
             momentum["ema21"],
             prev["ema21"],
-            trend["close"],
             last["open"],
         ]
+        if self.requires_m15:
+            required.extend([trend["ema200"], trend["close"]])
 
         if not np.isfinite(required).all():
             return hold
@@ -149,7 +152,7 @@ class XAUUSDM1Scalper:
         sl_distance = atr * self.atr_sl_multiplier
 
         buy = (
-            trend["close"] > trend["ema200"]
+            (not self.requires_m15 or trend["close"] > trend["ema200"])
             and momentum["ema9"] > momentum["ema21"]
             and prev["close"] <= prev["ema21"]
             and last["close"] > last["ema21"]
@@ -160,7 +163,7 @@ class XAUUSDM1Scalper:
         )
 
         sell = (
-            trend["close"] < trend["ema200"]
+            (not self.requires_m15 or trend["close"] < trend["ema200"])
             and momentum["ema9"] < momentum["ema21"]
             and prev["close"] >= prev["ema21"]
             and last["close"] < last["ema21"]

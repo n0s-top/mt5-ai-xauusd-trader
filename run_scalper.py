@@ -1,11 +1,15 @@
+import argparse
 import csv
+import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
+from src.strategies.entry_support import build_entry_plan
 from src.strategies.scalping_data import prepare_scalping_data
 from src.strategies.xauusd_m1_scalper import XAUUSDM1Scalper
 
@@ -19,6 +23,8 @@ COMMON = (
     "MetaTrader5/drive_c/users/han/AppData/Roaming/"
     "MetaQuotes/Terminal/Common/Files"
 )
+if os.name == "nt":
+    COMMON = Path(os.environ.get("APPDATA", Path.home())) / "MetaQuotes/Terminal/Common/Files"
 
 CSV_PATH = COMMON / f"MT5_{SYMBOL}_M1.csv"
 LOG_PATH = Path("logs/scalper_signals.csv")
@@ -109,6 +115,22 @@ def save_signal(candle_time, signal):
 
 
 def main():
+    global CSV_PATH, SYMBOL
+    parser = argparse.ArgumentParser(description="Manual entry assistant (no order submission)")
+    parser.add_argument("--symbol", default=SYMBOL)
+    parser.add_argument("--csv", type=Path)
+    parser.add_argument("--quote", type=Path, help="Live broker quote CSV exported by MT5 bridge")
+    parser.add_argument("--equity", type=float, help="Account equity in account currency")
+    parser.add_argument("--risk-percent", type=float, default=0.5)
+    parser.add_argument("--plan", type=Path, default=Path("logs/entry_plan.json"))
+    args = parser.parse_args()
+    if args.equity is not None and (not 0 < args.equity < float("inf")):
+        parser.error("--equity must be finite and positive")
+    if not 0 < args.risk_percent <= 100:
+        parser.error("--risk-percent must be in (0, 100]")
+    SYMBOL = args.symbol
+    CSV_PATH = args.csv or COMMON / f"MT5_{SYMBOL}_M1.csv"
+    quote_path = args.quote or CSV_PATH.with_name(f"MT5_{SYMBOL}_quote.csv")
     last_processed = None
 
     logging.info("XAUUSDc M1 Scalper started (SIGNAL ONLY)")
@@ -116,6 +138,9 @@ def main():
 
     while True:
         try:
+            # Remove the previous actionable plan before validating a fresh snapshot.
+            args.plan.parent.mkdir(parents=True, exist_ok=True)
+            args.plan.write_text(json.dumps({"status": "WAIT", "reason": "Awaiting fresh validation"}), encoding="utf-8")
             if not CSV_PATH.exists():
                 logging.warning("Chưa tìm thấy CSV")
                 time.sleep(POLL_SECONDS)
@@ -145,7 +170,7 @@ def main():
                 time.sleep(POLL_SECONDS)
                 continue
 
-            if last_processed == latest:
+            if last_processed == latest and args.equity is None:
                 time.sleep(POLL_SECONDS)
                 continue
 
@@ -154,7 +179,25 @@ def main():
                 time.sleep(POLL_SECONDS)
                 continue
 
-            signal = scalper.predict(data["M1"], data["M5"], data["M15"])
+            quote = None
+            if args.equity is not None:
+                quote = pd.read_csv(quote_path, encoding="utf-16").iloc[-1].to_dict()
+                quote_age = now.timestamp() - float(quote["time"])
+                if quote.get("symbol") != SYMBOL or not 0 <= quote_age <= 15:
+                    raise ValueError("Quote symbol mismatch or stale quote")
+            spread = float(quote["ask"]) - float(quote["bid"]) if quote else None
+            signal = scalper.predict(data["M1"], data["M5"], data["M15"], spread=spread)
+            if quote is not None:
+                plan = build_entry_plan(signal, quote, equity=args.equity,
+                                        risk_percent=args.risk_percent).to_dict()
+                plan.update(symbol=SYMBOL, candle_time=latest.isoformat(),
+                            generated_at_utc=now.isoformat(),
+                            expires_at_utc=datetime.fromtimestamp(
+                                min(float(quote["time"]) + 15,
+                                    latest.timestamp() + MAX_CANDLE_AGE), timezone.utc
+                            ).isoformat())
+                args.plan.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+                logging.info("Entry plan: %s", plan)
 
             logging.info(
                 "%s | %s | Direction=%s | Confidence=%s | SL=%s | TP=%s | Reason=%s",
@@ -167,7 +210,8 @@ def main():
                 signal.reason,
             )
 
-            save_signal(latest, signal)
+            if last_processed != latest:
+                save_signal(latest, signal)
             last_processed = latest
 
         except KeyboardInterrupt:
